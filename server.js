@@ -7,7 +7,7 @@ const helmet = require("helmet");
 const xss = require("xss-clean");
 const rateLimit = require("express-rate-limit");
 const { body, validationResult } = require("express-validator");
-const quickChatView = require("./quickChatView.js");    
+const quickChatView = require("./quickChatView.js");
 const initialiseDatabase = require("./initialiseDatabase.js"); // Import the database initialization module
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -28,9 +28,10 @@ app.use(xss());
 app.use(bodyParser.json());
 app.use("/signin", limiter);
 app.use("/signup", limiter);
-
-// Mock database
-const users = [];
+app.use("/nt_backends_api/v1/login", limiter);
+app.use("/nt_backends_api/v1/create_account", limiter);
+app.use("/nt_backends_api/v1/getchats", limiter);
+app.use("/signout", limiter);
 
 
 // Helper function to authenticate token
@@ -76,70 +77,52 @@ app.use((req, res, next) => {
     next();
 });
 
-// Route to create new account
-app.post("/signup", validateCredentials, async (req, res) => {
-    const errors = validationResult(req);
-    if (!errors.isEmpty()) {
-        return res.status(400).json({ errors: errors.array() });
-    }
-
-    const { username, password } = req.body;
-
-    try {
-        const existingUser = users.find((user) => user.username === username);
-        if (existingUser) {
-            return res.status(400).json({ error: "Username already exists" });
-        }
-
-        const hashedPassword = await bcrypt.hash(password, 12);
-        users.push({ username, password: hashedPassword });
-        res.status(201).json({ message: "Account created successfully" });
-    } catch (error) {
-        res.status(500).json({ error: "Server error during account creation" });
-    }
-});
-
 // Route to sign in
-app.post("/signin", validateCredentials, async (req, res) => {
+app.post("/nt_backends_api/v1/login", validateCredentials, async (req, res) => {
     const errors = validationResult(req);
-    if (!errors.isEmpty()) {
-        return res.status(400).json({ errors: errors.array() });
-    }
-
+    console.log("Log in verification process has began ...");
+    /*
+     if (!errors.isEmpty()) {
+         console.log("Validating log in details credentials... But errors found!");
+         return res.status(400).json({ errors: errors.array() });
+     }
+     */
     const { username, password } = req.body;
     console.log(`Attempting to sign in user: ${username}`);
-
     try {
-        const user = users.find((user) => user.username === username);
-        if (!user) {
-            return res.status(400).json({ error: "Invalid credentials" });
-        }
-
-        const isPasswordValid = await bcrypt.compare(password, user.password);
-        if (!isPasswordValid) {
-            return res.status(400).json({ error: "Invalid credentials" });
-        }
-
-        const token = jwt.sign({ username: user.username }, JWT_SECRET, {
-            expiresIn: "1h",
+        // Check if user exists in the database
+        //The verifyUser method in the UserDatabaseOperation class checks if the user exists and verifies the password
+        // by comparing the hashed password stored in the database with the provided password.
+        // If the user is found and the password matches, it returns true; otherwise, it returns false.
+        userDatabaseOperation.verifyUser(username, password, (err, isValid) => {
+            if (err) {
+                console.error("Error verifying user:", err.message);
+                return res.status(500).json({ error: "Server error during authentication" });
+            }
+            if (!isValid) {
+                return res.status(401).json({ error: "Invalid username or password" });
+            };
+            // Generate JWT token 
+            const token = jwt.sign({ username: username }, JWT_SECRET, {
+                expiresIn: "1h",
+            });
+            // Set cookie with token
+            res.cookie("token", token, {
+                httpOnly: true,
+                secure: process.env.NODE_ENV === "production",
+                sameSite: "strict",
+                maxAge: 3600000, // 1 hour
+            });
+            res.status(200).json({ message: "Authentication successful" });
+            console.log("User verified successfully")
         });
-
-        // Set cookie with token
-        res.cookie("token", token, {
-            httpOnly: true,
-            secure: process.env.NODE_ENV === "production",
-            sameSite: "strict",
-            maxAge: 3600000, // 1 hour
-        });
-
-        res.status(200).json({ message: "Authentication successful" });
     } catch (error) {
         res.status(500).json({ error: "Server error during authentication" });
     }
 });
 
 // Protected route example authenticated with JWT
-app.get("/nt_backends_api/v1/getchats" ,(req, res) => {
+app.get("/nt_backends_api/v1/getchats",authenticateToken, (req, res) => {
     res.status(200).json(quickChatView);
 });
 
@@ -151,22 +134,21 @@ app.post("/signout", (req, res) => {
 
 app.use(express.json());
 
-app.post("/nt_backends_api/v1/create_account", (req, res) => {
+app.post("/nt_backends_api/v1/create_account", async (req, res) => {
     const { username, password } = req.body;
-    //Just for testing porposes use bcrypt to hash the password 
-    const hashedPassword = bcrypt.hashSync(password, 30);
-    // Check if the user already exists
-    const existingUser = users.find((user) => user.username === username);
-    
-    userModel.addUser(username, password, (err, user) => {
+    //Password is hashed before being stored in the database by the UserDatabaseOperation class
+    userDatabaseOperation.addUser(username, password, (err, user) => {
         if (err) {
-            res.status(400).json({ error: err.message });
+            res.status(400).json({ error: "Username is already taken" });
         } else {
             res.json({ message: "User added successfully", user });
         }
-    });
+    }
+    );
 });
-
+app.get("", (req, res) => {
+    res.send("Welcome to the NT Backend API!");
+});
 // Error handling middleware
 app.use((err, req, res, next) => {
     console.error(err.stack);
