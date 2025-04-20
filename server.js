@@ -13,19 +13,24 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 const userDatabaseOperation = require("./UserDatabaseOperation.js"); // Import the user model
 
+//getting the jwt secret from the environment variable
 
 // Environment variables
 const JWT_SECRET = process.env.JWT_SECRET || "fallback_secret_use_env_var";
 // Rate limiting configuration
+/*
 const limiter = rateLimit({
     windowMs: 15 * 60 * 1000, // 15 minutes
     max: 100, // limit each IP to 100 requests per windowMs
 });
-app.set("https://render.com", true);
+app.set("https://dashboard.render.com/", true); // Trust first proxy (for Heroku)
+*/
+
 // Security middleware
 app.use(helmet());
 app.use(xss());
 app.use(bodyParser.json());
+/*
 app.use("/signin", limiter);
 app.use("/signup", limiter);
 app.use("/nt_backends_api/v1/login", limiter);
@@ -33,6 +38,7 @@ app.use("/nt_backends_api/v1/create_account", limiter);
 app.use("/nt_backends_api/v1/getchats", limiter);
 app.use("/signout", limiter);
 
+*/
 
 // Helper function to authenticate token
 function authenticateToken(req, res, next) {
@@ -122,7 +128,7 @@ app.post("/nt_backends_api/v1/login", validateCredentials, async (req, res) => {
 });
 
 // Protected route example authenticated with JWT
-app.get("/nt_backends_api/v1/getchats",authenticateToken, (req, res) => {
+app.get("/nt_backends_api/v1/getchats", authenticateToken, (req, res) => {
     res.status(200).json(quickChatView);
 });
 
