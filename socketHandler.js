@@ -2,8 +2,6 @@ const userDatabaseOperation = require("./UserDatabaseOperation.js"); // Import t
 
 const socketHandler = (io) => {
   io.on('connection', (socket) => {
-    console.log('New client connected');
-
     socket.on('register', ({ username, publicKey }) => {
       socket.username = username;
       socket.publicKey = publicKey;
@@ -11,9 +9,9 @@ const socketHandler = (io) => {
     });
 
     socket.on('request_public_key', (targetUsername) => {
-      //const user = getUserByUsername(targetUsername); 
-      //if (!user) return;
-      //socket.emit('public_key_response', { publicKey: user.publicKey });
+      const user = getUserByUsername(targetUsername); 
+      if (!user) return;
+      socket.emit('public_key_response', { publicKey: user.publicKey });
         userDatabaseOperation.getUserByUsername(targetUsername, (err, user) => {
             if (err) {
             console.error(err);
