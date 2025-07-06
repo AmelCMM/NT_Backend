@@ -338,7 +338,6 @@ const server = http.createServer(app);
 const allowedOrigins = [
   'https://amelcmm.github.io',
   'https://nt-secure-chat.vercel.app',
-  'http://localhost:3000', // For local testing
 ];
 
 // CORS configuration
