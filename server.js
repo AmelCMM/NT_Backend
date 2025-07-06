@@ -15,7 +15,7 @@ const server = http.createServer(app);
 
 // Configure CORS for specific origins
 const allowedOrigins = [
-  'https://amelcmm.github.io/myportifolio/',
+  'https://amelcmm.github.io',
   'https://nt-secure-chat.vercel.app', // Frontend deployed URL
   // Add other frontend URLs as needed
 ];
