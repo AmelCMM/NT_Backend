@@ -8,42 +8,114 @@ const xss = require('xss-clean');
 const cors = require('cors');
 const { body, validationResult } = require('express-validator');
 const jwt = require('jsonwebtoken');
+const rateLimit = require('express-rate-limit');
+const cookie = require('cookie'); // Explicitly include latest cookie package
 const userDatabaseOperation = require('./UserDatabaseOperation'); // Ensure this module exists
 
 const app = express();
 const server = http.createServer(app);
 
-// Configure CORS for specific origins
+// Define allowed origins
 const allowedOrigins = [
   'https://amelcmm.github.io',
-  'https://nt-secure-chat.vercel.app', // Frontend deployed URL
-  // Add other frontend URLs as needed
+  'https://nt-secure-chat.vercel.app',
 ];
+
+// Strict CORS configuration
 app.use(cors({
   origin: (origin, callback) => {
-    if (!origin || allowedOrigins.includes(origin)) {
+    if (!origin) {
+      // Block requests without an origin (e.g., Postman, curl)
+      return callback(new Error('No Origin header provided'), false);
+    }
+    if (allowedOrigins.includes(origin)) {
       callback(null, true);
     } else {
-      callback(new Error('Not allowed by CORS'));
+      callback(new Error('Not allowed by CORS'), false);
     }
   },
   methods: ['GET', 'POST', 'PUT', 'DELETE'],
-  allowedHeaders: ['Content-Type', 'Authorization']
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-App-CSRF'],
+  credentials: true, // Allow cookies for sessions
 }));
 
+// Custom middleware to block non-browser clients
+app.use((req, res, next) => {
+  const userAgent = req.headers['user-agent'];
+  const appHeader = req.headers['x-app-source'];
+  if (!userAgent || userAgent.includes('Postman') || userAgent.includes('curl') || appHeader !== 'nt-secure-chat') {
+    return res.status(403).json({ error: 'Requests from this client are not allowed' });
+  }
+  next();
+});
+
+// Rate limiting to prevent abuse
+const limiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 100, // Limit each IP to 100 requests per windowMs
+  message: { error: 'Too many requests, please try again later.' },
+});
+app.use(limiter);
+
 // Middleware
-app.use(helmet());
+app.use(helmet({
+  contentSecurityPolicy: {
+    directives: {
+      defaultSrc: ["'self'"],
+      connectSrc: ["'self'", ...allowedOrigins],
+      scriptSrc: ["'self'"],
+    },
+  },
+}));
 app.use(xss());
-app.use(express.json()); // Replaces bodyParser.json()
+app.use(express.json());
 app.use(express.static(__dirname + '/public'));
+
+// Custom CSRF Token Middleware
+const generateCsrfToken = (req, res, next) => {
+  const csrfToken = jwt.sign(
+    { ip: req.ip, userAgent: req.headers['user-agent'] },
+    process.env.JWT_SECRET,
+    { expiresIn: '15m' } // Short-lived token
+  );
+  res.cookie('csrf_token', csrfToken, {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === 'production',
+    sameSite: 'strict',
+  });
+  res.json({ csrfToken });
+};
+
+const verifyCsrfToken = (req, res, next) => {
+  const csrfToken = req.headers['x-app-csrf'] || req.cookies['csrf_token'];
+  if (!csrfToken) {
+    return res.status(403).json({ error: 'CSRF token missing' });
+  }
+  try {
+    const decoded = jwt.verify(csrfToken, process.env.JWT_SECRET);
+    if (decoded.ip !== req.ip || decoded.userAgent !== req.headers['user-agent']) {
+      return res.status(403).json({ error: 'Invalid CSRF token' });
+    }
+    next();
+  } catch (err) {
+    return res.status(403).json({ error: 'Invalid or expired CSRF token' });
+  }
+};
 
 // Socket.IO Configuration
 const io = new Server(server, {
   path: '/nt_backends_api/v1/socket.io',
   cors: {
-    origin: allowedOrigins,
-    methods: ['GET', 'POST']
-  }
+    origin: (origin, callback) => {
+      if (!origin || allowedOrigins.includes(origin)) {
+        callback(null, true);
+      } else {
+        callback(new Error('Not allowed by CORS'));
+      }
+    },
+    methods: ['GET', 'POST'],
+    credentials: true,
+  },
 });
 
 // Credential validation for login
@@ -53,8 +125,11 @@ const validateCredentials = [
     .matches(/^(?=.*[A-Za-z])(?=.*\d)/).withMessage('Password must contain letters and numbers'),
 ];
 
-// Email Sending Route (for contact form)
-app.post('/mypt/send-email', async (req, res) => {
+// CSRF Token Route
+app.get('/nt_backends_api/v1/csrf-token', generateCsrfToken);
+
+// Email Sending Route
+app.post('/mypt/send-email', verifyCsrfToken, async (req, res) => {
   console.log('Received email request:', req.body);
   const { name, email, message } = req.body;
 
@@ -69,22 +144,20 @@ app.post('/mypt/send-email', async (req, res) => {
     return res.status(400).json({ error: 'Invalid email address' });
   }
 
-  // Validate message length (based on frontend minlength=30)
+  // Validate message length
   if (message.length < 30) {
     return res.status(400).json({ error: 'Message must be at least 30 characters long' });
   }
 
   try {
-    // Set up Nodemailer transporter for Gmail
     const transporter = nodemailer.createTransport({
       service: 'gmail',
       auth: {
         user: process.env.EMAIL_USER,
-        pass: process.env.EMAIL_PASS
-      }
+        pass: process.env.EMAIL_PASS,
+      },
     });
 
-    // Define email options
     const mailOptions = {
       from: `"${name}" <${process.env.EMAIL_USER}>`,
       to: process.env.EMAIL_USER,
@@ -96,10 +169,9 @@ app.post('/mypt/send-email', async (req, res) => {
         <p><strong>Name:</strong> ${name}</p>
         <p><strong>Email:</strong> ${email}</p>
         <p><strong>Message:</strong> ${message}</p>
-      `
+      `,
     };
 
-    // Send the email
     await transporter.sendMail(mailOptions);
     res.status(200).json({ message: 'Email sent successfully' });
   } catch (error) {
@@ -109,7 +181,7 @@ app.post('/mypt/send-email', async (req, res) => {
 });
 
 // Login Route
-app.post('/nt_backends_api/v1/login', validateCredentials, (req, res) => {
+app.post('/nt_backends_api/v1/login', verifyCsrfToken, validateCredentials, (req, res) => {
   const errors = validationResult(req);
   if (!errors.isEmpty()) {
     return res.status(400).json({ errors: errors.array() });
@@ -136,20 +208,21 @@ app.post('/nt_backends_api/v1/login', validateCredentials, (req, res) => {
       res.json({
         message: 'Authentication successful',
         token,
-        user: { id: user.id, username: user.username, publicKey: user.publicKey }
+        user: { id: user.id, username: user.username, publicKey: user.publicKey },
       });
     });
   });
 });
 
 // Signout Route
-app.post('/nt_backends_api/v1/signout', (req, res) => {
+app.post('/nt_backends_api/v1/signout', verifyCsrfToken, (req, res) => {
   res.clearCookie('token');
+  res.clearCookie('csrf_token');
   res.json({ message: 'Signed out successfully' });
 });
 
 // Create Account Route
-app.post('/nt_backends_api/v1/create_account', validateCredentials, (req, res) => {
+app.post('/nt_backends_api/v1/create_account', verifyCsrfToken, validateCredentials, (req, res) => {
   const errors = validationResult(req);
   if (!errors.isEmpty()) {
     return res.status(400).json({ errors: errors.array() });
@@ -228,7 +301,6 @@ io.on('connection', (socket) => {
     delete onlineUsers[username];
   });
 });
-
 
 // Start Server
 const port = process.env.PORT || 3000;
