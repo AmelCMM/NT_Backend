@@ -338,6 +338,7 @@ const server = http.createServer(app);
 const allowedOrigins = [
   'https://amelcmm.github.io',
   'https://nt-secure-chat.vercel.app',
+  '*'
 ];
 
 // CORS configuration
@@ -639,3 +640,4 @@ const port = process.env.PORT || 3000;
 server.listen(port, () => {
   console.log(`Server running on port ${port}`);
 });
+
